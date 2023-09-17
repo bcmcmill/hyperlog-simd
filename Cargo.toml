@@ -3,6 +3,7 @@ name = "hyperlog_simd"
 version = "0.1.0"
 edition = "2021"
 authors = ["Brandon McMillan <brandon.mcmillan@icloud.com>"]
+license = "MIT"
 
 [dependencies]
 nanorand = "0.7.0"
