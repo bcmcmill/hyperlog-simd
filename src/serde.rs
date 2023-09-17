@@ -1,96 +1,37 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{self};
+use std::{collections::HashMap, fmt, io, marker::PhantomData};
 
 use base64::{engine::general_purpose, Engine};
 use lz4::{Decoder, EncoderBuilder};
-use serde::de::MapAccess;
 use serde::{
-    de::{self, Deserializer, Error, Visitor},
+    de::{Error, MapAccess, Visitor},
     ser::Error as SerError,
-    Deserialize, Serialize, Serializer,
+    Serialize, Serializer,
 };
 
 use crate::M;
-use crate::{classic::HyperLogLog, plusplus::HyperLogLogPlusPlus};
 
-struct HyperLogLogVisitor;
+// A constant representing the key used to store serialized registers.
+const REGISTER_KEY: &str = "registers";
 
-impl<'de> Visitor<'de> for HyperLogLogVisitor {
-    type Value = HyperLogLog;
+/// Represents a visitor for deserializing compressed register values in HLL structures.
+///
+/// The visitor pattern in Serde allows for data structures to be deserialized
+/// in a customized manner. In this case, the `CompressedRegistersVisitor` is
+/// tailored for handling the compressed format of the registers.
+pub(crate) struct CompressedRegistersVisitor<T>(PhantomData<T>);
 
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("base64 encoded lz4 compressed sequence of bytes")
-    }
-
-    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::MapAccess<'de>,
-    {
-        let hll = extract_and_decompress(map)?;
-
-        Ok(hll)
+impl<T> CompressedRegistersVisitor<T> {
+    /// Create a new compressed register visitor.
+    pub(crate) fn new() -> Self {
+        Self(PhantomData)
     }
 }
 
-impl<'de> Deserialize<'de> for HyperLogLog {
-    fn deserialize<D>(deserializer: D) -> Result<HyperLogLog, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_map(HyperLogLogVisitor)
-    }
-}
-
-fn extract_and_decompress<'de, A>(mut map: A) -> Result<HyperLogLog, <A as MapAccess<'de>>::Error>
+impl<'de, T> Visitor<'de> for CompressedRegistersVisitor<T>
 where
-    A: de::MapAccess<'de>,
+    T: From<[u8; M]>,
 {
-    let mut registers = String::new();
-    while let Some((key, value)) = map.next_entry::<String, String>()? {
-        if key == "registers" {
-            registers = value;
-        }
-    }
-    let compressed = general_purpose::STANDARD
-        .decode(&registers)
-        .map_err(A::Error::custom)?;
-    let mut decoder = Decoder::new(io::Cursor::new(compressed)).map_err(A::Error::custom)?;
-    let mut decompressed = vec![];
-    io::copy(&mut decoder, &mut decompressed).map_err(A::Error::custom)?;
-    let mut hll = HyperLogLog { registers: [0; M] };
-    io::copy(
-        &mut io::Cursor::new(decompressed),
-        &mut hll.registers.as_mut_slice(),
-    )
-    .map_err(A::Error::custom)?;
-    Ok(hll)
-}
-
-impl Serialize for HyperLogLog {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut compressed = Vec::new();
-        let mut enc = EncoderBuilder::new()
-            .level(16)
-            .build(&mut compressed)
-            .map_err(S::Error::custom)?;
-
-        io::copy(&mut io::Cursor::new(self.registers), &mut enc).map_err(S::Error::custom)?;
-
-        let s = general_purpose::STANDARD.encode(&compressed);
-        let mut map = HashMap::new();
-
-        map.insert("registers", s);
-        map.serialize(serializer)
-    }
-}
-struct HyperLogLogPlusPlusVisitor;
-
-impl<'de> Visitor<'de> for HyperLogLogPlusPlusVisitor {
-    type Value = HyperLogLogPlusPlus;
+    type Value = T;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("base64 encoded lz4 compressed sequence of bytes")
@@ -98,67 +39,66 @@ impl<'de> Visitor<'de> for HyperLogLogPlusPlusVisitor {
 
     fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
     where
-        A: de::MapAccess<'de>,
+        A: MapAccess<'de>,
     {
-        let hll = extract_and_decompress_pp(map)?;
-
-        Ok(hll)
+        extract_and_decompress(map, [0; M])
     }
 }
 
-impl<'de> Deserialize<'de> for HyperLogLogPlusPlus {
-    fn deserialize<D>(deserializer: D) -> Result<HyperLogLogPlusPlus, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_map(HyperLogLogPlusPlusVisitor)
-    }
-}
-
-fn extract_and_decompress_pp<'de, A>(
+/// Extracts and decompresses the serialized registers from the provided map.
+///
+/// # Arguments
+///
+/// * `map`: The serialized map containing the compressed registers.
+/// * `default_registers`: The default registers to be used if no compressed registers are found.
+pub(crate) fn extract_and_decompress<'de, A, T>(
     mut map: A,
-) -> Result<HyperLogLogPlusPlus, <A as MapAccess<'de>>::Error>
+    default_registers: [u8; M],
+) -> Result<T, <A as MapAccess<'de>>::Error>
 where
-    A: de::MapAccess<'de>,
+    A: MapAccess<'de>,
+    T: From<[u8; M]>,
 {
     let mut registers = String::new();
+
     while let Some((key, value)) = map.next_entry::<String, String>()? {
-        if key == "registers" {
+        if key == REGISTER_KEY {
             registers = value;
         }
     }
+
     let compressed = general_purpose::STANDARD
         .decode(&registers)
         .map_err(A::Error::custom)?;
     let mut decoder = Decoder::new(io::Cursor::new(compressed)).map_err(A::Error::custom)?;
-    let mut decompressed = vec![];
-    io::copy(&mut decoder, &mut decompressed).map_err(A::Error::custom)?;
-    let mut hll = HyperLogLogPlusPlus { registers: [0; M] };
-    io::copy(
-        &mut io::Cursor::new(decompressed),
-        &mut hll.registers.as_mut_slice(),
-    )
-    .map_err(A::Error::custom)?;
-    Ok(hll)
+    let mut result_registers = default_registers;
+
+    io::copy(&mut decoder, &mut result_registers.as_mut_slice()).map_err(A::Error::custom)?;
+
+    Ok(T::from(result_registers))
 }
 
-impl Serialize for HyperLogLogPlusPlus {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut compressed = Vec::new();
-        let mut enc = EncoderBuilder::new()
-            .level(16)
-            .build(&mut compressed)
-            .map_err(S::Error::custom)?;
+/// Serializes the provided registers into a compressed format suitable for transmission or storage.
+///
+/// # Arguments
+///
+/// * `registers`: The registers to be serialized.
+/// * `serializer`: The Serde serializer to use.
+pub(crate) fn serialize_registers<S>(registers: &[u8; M], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut compressed = Vec::new();
+    let mut enc = EncoderBuilder::new()
+        .level(16)
+        .build(&mut compressed)
+        .map_err(S::Error::custom)?;
 
-        io::copy(&mut io::Cursor::new(self.registers), &mut enc).map_err(S::Error::custom)?;
+    io::copy(&mut io::Cursor::new(registers), &mut enc).map_err(S::Error::custom)?;
 
-        let s = general_purpose::STANDARD.encode(&compressed);
-        let mut map = HashMap::new();
+    let s = general_purpose::STANDARD.encode(&compressed);
+    let mut map = HashMap::new();
 
-        map.insert("registers", s);
-        map.serialize(serializer)
-    }
+    map.insert(REGISTER_KEY, s);
+    map.serialize(serializer)
 }
