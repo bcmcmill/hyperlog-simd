@@ -7,7 +7,7 @@ A Rust implementation of HyperLogLog and HyperLogLogPlusPlus streaming distinct 
 
 ## Features
 
-- 🚀 **HLL and HLL++**: Implementations of both HyperLogLog (HLL) and HyperLogLog++ (HLL++) algorithms.
+- 🔬 **HLL and HLL++**: Implementations of both HyperLogLog (HLL) and HyperLogLog++ (HLL++) algorithms.
 - 🚀 **Fast SIMD Support**: Leverage the speed of SIMD operations on both ARM and x86_64 platforms.
 - 🔄 **Merge Sketches**: Combine multiple sketches to allow for incremental and parallel processing.
 - 📦 **Serde Compatibility**: Easily serialize and deserialize your sketches.
