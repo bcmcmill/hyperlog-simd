@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use hyperloglog::plusplus::HyperLogLogPlusPlus;
+use hyperlog_simd::plusplus::HyperLogLogPlusPlus;
 use nanorand::{Rng, WyRand};
 
 fn generate_random_numbers(n: usize) -> Vec<u32> {

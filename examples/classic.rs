@@ -1,6 +1,6 @@
 #![feature(slice_pattern)]
 
-use hyperloglog::classic::HyperLogLog;
+use hyperlog_simd::classic::HyperLogLog;
 use nanorand::Rng;
 
 use std::{

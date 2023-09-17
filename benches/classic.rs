@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use hyperloglog::HyperLogLog;
+use hyperlog_simd::HyperLogLog;
 use nanorand::{Rng, WyRand};
 
 fn generate_random_numbers(n: usize) -> Vec<u32> {
