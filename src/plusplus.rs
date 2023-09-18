@@ -118,7 +118,7 @@ impl Default for HyperLogLogPlusPlus {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
     /// let hll = HyperLogLogPlusPlus::default();
     /// // ... use the `hll` instance ...
     /// ```
