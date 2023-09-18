@@ -97,6 +97,22 @@ impl HyperLogLog {
     }
 }
 
+impl Default for HyperLogLog {
+    /// Creates a default instance of `HyperLogLog`.
+    ///
+    /// This is equivalent to calling `HyperLogLog::new()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let hll = HyperLogLog::default();
+    /// // ... use the `hll` instance ...
+    /// ```
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl From<[u8; M]> for HyperLogLog {
     /// Creates a `HyperLogLogPlusPlus` instance from a given array of registers.
     ///

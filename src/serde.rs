@@ -68,7 +68,7 @@ where
     }
 
     let compressed = general_purpose::STANDARD
-        .decode(&registers)
+        .decode(registers)
         .map_err(A::Error::custom)?;
     let mut decoder = Decoder::new(io::Cursor::new(compressed)).map_err(A::Error::custom)?;
     let mut result_registers = default_registers;
