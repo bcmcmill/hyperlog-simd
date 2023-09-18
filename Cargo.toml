@@ -1,6 +1,6 @@
 [package]
 name = "hyperlog_simd"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Brandon McMillan <brandon.mcmillan@icloud.com>"]
 license = "MIT"
@@ -10,16 +10,14 @@ description = "A SIMD optimized implementation of the HLL and HLL++ algorithms"
 
 [features]
 default = ["serde_support"]
-serde_support = ["base64", "lz4", "serde/derive", "serde_json"]
+serde_support = ["base64", "lz4", "serde/derive"]
 
 [dependencies]
-nanorand = "0.7.0"
 seahash = "4.1.0"
 
 base64 = { version = "0.21.4", optional = true }
 lz4 = { version = "1.24.0", optional = true }
 serde = { version = "1.0.188", features = ["derive"], optional = true }
-serde_json = { version = "1.0.107", optional = true }
 
 [target.'cfg(target_arch = "aarch64")'.dependencies]
 packed_simd = { version = "0.3.9", features = ["libcore_neon", "into_bits"] }
@@ -29,6 +27,8 @@ packed_simd = { version = "0.3.9", features = ["into_bits"] }
 
 [dev-dependencies]
 criterion = "0.5.1"
+nanorand = "0.7.0"
+serde_json = "1.0.107"
 
 [[example]]
 name = "hll"
