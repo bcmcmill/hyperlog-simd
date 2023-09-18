@@ -1,9 +1,11 @@
 [package]
 name = "hyperlog_simd"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Brandon McMillan <brandon.mcmillan@icloud.com>"]
 license = "MIT"
+repository = "https://github.com/bcmcmill/hyperlog-simd"
+documentation = "https://docs.rs/hyperlog-simd"
 description = "A SIMD optimized implementation of the HLL and HLL++ algorithms"
 
 [features]
