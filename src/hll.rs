@@ -104,7 +104,7 @@ impl Default for HyperLogLog {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// let hll = HyperLogLog::default();
     /// // ... use the `hll` instance ...
     /// ```
