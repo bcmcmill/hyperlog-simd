@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Brandon McMillan <brandon.mcmillan@icloud.com>"]
 license = "MIT"
+description = "A SIMD optimized implementation of the HLL and HLL++ algorithms"
 
 [features]
 default = ["serde_support"]
