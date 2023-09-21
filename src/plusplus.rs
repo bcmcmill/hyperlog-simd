@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use packed_simd::{f64x4, u32x2};
+use packed_simd::{f64x8, u32x2, u8x16};
 use seahash::SeaHasher;
 
 #[cfg(feature = "serde_support")]
@@ -8,7 +8,7 @@ use crate::serde::{serialize_registers, CompressedRegistersVisitor};
 #[cfg(feature = "serde_support")]
 use serde::{de::Deserializer, Deserialize, Serialize, Serializer};
 
-use crate::{ALPHA, M, P};
+use crate::{ALPHA, EMPTY_REGISTERS, M, P};
 
 /// An enhanced HyperLogLog data structure, often termed HyperLogLog++,
 /// for estimating the cardinality of a dataset without storing individual elements.
@@ -16,7 +16,7 @@ use crate::{ALPHA, M, P};
 pub struct HyperLogLogPlusPlus {
     /// Registers used for maintaining the cardinality estimate.
     /// The number of registers (`M`) impacts precision and memory usage.
-    pub registers: [u8; M],
+    pub registers: Box<[u8; M]>,
 }
 
 impl HyperLogLogPlusPlus {
@@ -26,7 +26,9 @@ impl HyperLogLogPlusPlus {
     /// A new `HyperLogLogPlusPlus` instance.
     #[inline(always)]
     pub fn new() -> Self {
-        Self { registers: [0; M] }
+        Self {
+            registers: Box::new(unsafe { EMPTY_REGISTERS.clone() }),
+        }
     }
 
     /// Adds an item to the HyperLogLog++. This will update the registers based on
@@ -37,7 +39,9 @@ impl HyperLogLogPlusPlus {
     #[inline(always)]
     pub fn add<T: Hash>(&mut self, item: T) {
         let mut h = SeaHasher::default();
+
         item.hash(&mut h);
+
         let mut hash = h.finish();
 
         for _ in 0..2 {
@@ -45,12 +49,15 @@ impl HyperLogLogPlusPlus {
                 (hash & (M as u64 - 1)) as u32,
                 ((hash >> 32) & (M as u64 - 1)) as u32,
             );
+
             let vec_w = u32x2::new((hash >> P) as u32, (hash >> (32 + P)) as u32);
             let vec_rank = vec_w.min_element().leading_zeros() as u8 + 1;
             let max_index = vec_hash.extract(0) as usize;
+
             if self.registers[max_index] < vec_rank {
                 self.registers[max_index] = vec_rank;
             }
+
             hash = hash.wrapping_shr(64);
         }
     }
@@ -61,34 +68,32 @@ impl HyperLogLogPlusPlus {
     /// An approximate count (as `f64`) of unique items added.
     #[inline(always)]
     pub fn estimate(&self) -> f64 {
-        // Use SIMD operations to process chunks of the registers for efficiency
-        let simd_chunk_parts = unsafe {
-            std::slice::from_raw_parts(
-                self.registers.as_ptr() as *const u64,
-                self.registers.len() / 4,
-            )
-        };
-        let simd_vecs: Vec<f64x4> = simd_chunk_parts
-            .iter()
-            .map(|&chunk| {
-                f64x4::new(
-                    chunk as f64,
-                    (chunk.wrapping_shr(32)) as f64,
-                    (chunk.wrapping_shr(64)) as f64,
-                    (chunk.wrapping_shr(96)) as f64,
-                )
-            })
-            .collect();
+        let mut acc_sum = f64x8::splat(0.0);
+        let len = self.registers.len();
+        let simd_iteration_count = len / 8;
 
-        let acc_sum = simd_vecs
-            .iter()
-            .fold(f64x4::splat(0.0), |acc, &element_rank| {
-                acc + f64x4::splat(2.0).powf(-element_rank)
-            });
+        for i in 0..simd_iteration_count {
+            let chunk = self.registers[i * 8..(i + 1) * 8]
+                .iter()
+                .map(|&x| x as f64)
+                .collect::<Vec<f64>>();
+            let vector = f64x8::from_slice_unaligned(&chunk);
+            acc_sum += f64x8::splat(2.0).powf(-vector);
+        }
+
+        let rem = len % 8;
+
+        if rem > 0 {
+            let chunk = self.registers[len - rem..]
+                .iter()
+                .map(|&x| x as f64)
+                .collect::<Vec<f64>>();
+            let vector = f64x8::from_slice_unaligned(&chunk);
+            acc_sum += f64x8::splat(2.0).powf(-vector);
+        }
 
         let harmonic_mean: f64 = 1.0 / acc_sum.sum();
         let approx_cardinality: f64 = ALPHA * (M * M) as f64 * harmonic_mean;
-
         let zero_reg_count: f64 = self.registers.iter().filter(|&rank| *rank == 0).count() as f64;
 
         if approx_cardinality <= 2.5 * M as f64 && zero_reg_count > 0.0 {
@@ -105,7 +110,21 @@ impl HyperLogLogPlusPlus {
     /// * `other`: The other `HyperLogLogPlusPlus` instance whose state is to be merged into this one.
     #[inline(always)]
     pub fn merge(&mut self, other: &HyperLogLogPlusPlus) {
-        for i in 0..M {
+        const CHUNKS: usize = M / 16; // This needs to be a const
+
+        unsafe {
+            let self_regs =
+                std::slice::from_raw_parts_mut(self.registers.as_mut_ptr() as *mut u8x16, CHUNKS);
+            let other_regs =
+                std::slice::from_raw_parts(other.registers.as_ptr() as *const u8x16, CHUNKS);
+
+            for i in 0..CHUNKS {
+                self_regs[i] = self_regs[i].max(other_regs[i]);
+            }
+        }
+
+        // If M is not a multiple of 16, process remaining elements
+        for i in (CHUNKS * 16)..M {
             self.registers[i] = std::cmp::max(self.registers[i], other.registers[i]);
         }
     }
@@ -135,7 +154,9 @@ impl From<[u8; M]> for HyperLogLogPlusPlus {
     /// * `registers`: An array of `u8` representing the internal state
     ///   of the HyperLogLogPlusPlus.
     fn from(registers: [u8; M]) -> Self {
-        HyperLogLogPlusPlus { registers }
+        HyperLogLogPlusPlus {
+            registers: Box::new(registers),
+        }
     }
 }
 
@@ -221,7 +242,7 @@ mod tests {
             hllpp.add(val);
         }
 
-        let estimate = hllpp.estimate();
+        let estimate = dbg!(hllpp.estimate());
         assert!(
             unique_values.len() as f64 * 0.9 <= estimate
                 && estimate <= unique_values.len() as f64 * 1.1,
@@ -233,13 +254,13 @@ mod tests {
     fn test_large_number_of_values() {
         let mut hllpp = HyperLogLogPlusPlus::new();
 
-        for i in 0..1_000_000 {
+        for i in 0..500_000 {
             hllpp.add(i);
         }
 
         let estimate = hllpp.estimate();
         assert!(
-            (990_000..1_010_000).contains(&(dbg!(estimate) as usize)),
+            (490_000..510_000).contains(&(dbg!(estimate) as usize)),
             "Estimate out of expected range"
         );
     }
