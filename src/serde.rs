@@ -41,7 +41,7 @@ where
     where
         A: MapAccess<'de>,
     {
-        extract_and_decompress(map, [0; M])
+        extract_and_decompress(map, &[0; M])
     }
 }
 
@@ -53,7 +53,7 @@ where
 /// * `default_registers`: The default registers to be used if no compressed registers are found.
 pub(crate) fn extract_and_decompress<'de, A, T>(
     mut map: A,
-    default_registers: [u8; M],
+    default_registers: &[u8; M],
 ) -> Result<T, <A as MapAccess<'de>>::Error>
 where
     A: MapAccess<'de>,
@@ -71,7 +71,7 @@ where
         .decode(registers)
         .map_err(A::Error::custom)?;
     let mut decoder = Decoder::new(io::Cursor::new(compressed)).map_err(A::Error::custom)?;
-    let mut result_registers = default_registers;
+    let mut result_registers = default_registers.clone();
 
     io::copy(&mut decoder, &mut result_registers.as_mut_slice()).map_err(A::Error::custom)?;
 

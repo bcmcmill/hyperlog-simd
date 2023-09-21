@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use packed_simd::f64x2;
+use packed_simd::{f64x8, u8x16};
 use seahash::SeaHasher;
 
 #[cfg(feature = "serde_support")]
@@ -17,7 +17,7 @@ use crate::{M, P};
 pub struct HyperLogLog {
     /// An array of registers. The number of registers is specified by the constant `M`
     /// and determines the precision and memory usage of the HLL.
-    pub registers: [u8; M],
+    pub registers: Box<[u8; M]>,
 }
 
 impl HyperLogLog {
@@ -25,7 +25,7 @@ impl HyperLogLog {
     ///
     /// # Returns
     /// A `f64` alpha constant value for the given `M`.
-    #[inline]
+    #[inline(always)]
     fn get_alpha() -> f64 {
         match M {
             16 => 0.673,
@@ -40,7 +40,9 @@ impl HyperLogLog {
     /// # Returns
     /// A new `HyperLogLog` instance.
     pub fn new() -> Self {
-        Self { registers: [0; M] }
+        Self {
+            registers: Box::new([0; M]),
+        }
     }
 
     /// Adds an item to the HyperLogLog. This does not increase the memory footprint
@@ -48,7 +50,7 @@ impl HyperLogLog {
     ///
     /// # Parameters
     /// * `item`: An item that implements the `Hash` trait to be added to the HLL.
-    #[inline]
+    #[inline(always)]
     pub fn add<T: Hash>(&mut self, item: T) {
         let mut hasher = SeaHasher::new();
         item.hash(&mut hasher);
@@ -63,18 +65,38 @@ impl HyperLogLog {
     ///
     /// # Returns
     /// A `f64` approximate count of unique items added to the HLL.
-    #[inline]
+    #[inline(always)]
     pub fn estimate(&self) -> f64 {
-        let mut z = 0.0;
-        for i in (0..M).step_by(2) {
-            let val1 = f64x2::new(
-                2f64.powi(-i32::from(self.registers[i])),
-                2f64.powi(-i32::from(self.registers[i + 1])),
+        let len = self.registers.len();
+        let simd_iteration_count = len / 8;
+        let mut z = f64x8::splat(0.0);
+
+        for i in 0..simd_iteration_count {
+            z += f64x8::new(
+                2f64.powi(-i32::from(self.registers[i * 8])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 1])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 2])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 3])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 4])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 5])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 6])),
+                2f64.powi(-i32::from(self.registers[i * 8 + 7])),
             );
-            z += val1.sum();
         }
 
-        let raw_estimate = Self::get_alpha() * (M * M) as f64 / z;
+        // Processing the remainder
+        let rem = len % 8;
+        if rem != 0 {
+            let mut remainder = f64x8::splat(0.0);
+            for i in 0..rem {
+                remainder += f64x8::splat(
+                    2f64.powi(-i32::from(self.registers[simd_iteration_count * 8 + i])),
+                );
+            }
+            z += remainder;
+        }
+
+        let raw_estimate = Self::get_alpha() * (M * M) as f64 / z.sum();
         let num_zeros = self.registers.iter().filter(|&&val| val == 0).count();
 
         if num_zeros > 0 {
@@ -89,10 +111,24 @@ impl HyperLogLog {
     ///
     /// # Parameters
     /// * `other`: A reference to another `HyperLogLog` instance to be merged.
-    #[inline]
-    pub fn merge(&mut self, other: &Self) {
-        for i in 0..M {
-            self.registers[i] = self.registers[i].max(other.registers[i]);
+    #[inline(always)]
+    pub fn merge(&mut self, other: &HyperLogLog) {
+        const CHUNKS: usize = M / 16; // This needs to be a const
+
+        unsafe {
+            let self_regs =
+                std::slice::from_raw_parts_mut(self.registers.as_mut_ptr() as *mut u8x16, CHUNKS);
+            let other_regs =
+                std::slice::from_raw_parts(other.registers.as_ptr() as *const u8x16, CHUNKS);
+
+            for i in 0..CHUNKS {
+                self_regs[i] = self_regs[i].max(other_regs[i]);
+            }
+        }
+
+        // If M is not a multiple of 16, process remaining elements
+        for i in (CHUNKS * 16)..M {
+            self.registers[i] = std::cmp::max(self.registers[i], other.registers[i]);
         }
     }
 }
@@ -121,7 +157,8 @@ impl From<[u8; M]> for HyperLogLog {
     /// * `registers`: An array of `u8` representing the internal state
     ///   of the HyperLogLogPlusPlus.
     fn from(registers: [u8; M]) -> Self {
-        HyperLogLog { registers }
+        let r = Box::new(registers);
+        HyperLogLog { registers: r }
     }
 }
 
